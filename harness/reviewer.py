@@ -26,6 +26,7 @@ import json
 import random
 import re
 import statistics
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -35,6 +36,8 @@ from typing import Any
 
 from .decontamination import build as build_contamination_index
 from .telemetry.pipeline_usage import normalize_usage
+from dataflow_evolve.core.contracts import InputContract
+from dataflow_evolve.media import MediaPolicy, validate_media_manifest, visual_sample_parts
 
 _RAW_TEXT_LIMIT = 20000
 
@@ -230,7 +233,7 @@ def _extract_json(text: str) -> Any | None:
     return None
 
 
-def _call_llm(api_url: str, api_key: str, model: str, prompt: str,
+def _call_llm(api_url: str, api_key: str, model: str, prompt: str | list[dict],
               timeout_sec: float) -> dict[str, Any]:
     """POST one chat completion to an OpenAI-compatible endpoint; raises on failure."""
     url = api_url.strip().rstrip("/")
@@ -337,7 +340,7 @@ class CriteriaReviewer:
         self.ngram_size = ngram_size
         self.max_contam_rate = max_contam_rate
 
-    def _judge(self, prompt: str, n_criteria: int) -> tuple[tuple | None, list[dict[str, Any]]]:
+    def _judge(self, prompt: str | list[dict], n_criteria: int) -> tuple[tuple | None, list[dict[str, Any]]]:
         """Call the review LLM until one reply is a valid criteria object.
 
         Returns the parsed verdict (or None if every attempt failed) and one
@@ -387,6 +390,9 @@ class CriteriaReviewer:
         target_schema: dict[str, str],
         task_description: str,
         evidence_path: str | None = None,
+        input_contract: dict[str, Any] | None = None,
+        output_artifact_fields: dict[str, str] | None = None,
+        media_policy: dict[str, Any] | None = None,
     ) -> ReviewResult:
         if not quality_criteria:
             return ReviewResult(0.0, False, ["criteria review needs at least one quality criterion"],
@@ -395,7 +401,29 @@ class CriteriaReviewer:
             return ReviewResult(0.0, False, ["review LLM is not configured (review_api_url / review_model)"],
                                 status="error")
 
-        samples_text = _sample_jsonl(dataset_path, self.sample_size, self.sample_seed)
+        visual_evidence = []
+        try:
+            policy = MediaPolicy.from_mapping(media_policy)
+            modalities = (input_contract or {}).get("modalities", ["text"])
+            visual_required = bool(set(modalities) & {"image", "video"})
+            fields = output_artifact_fields or {}
+            output_contract = InputContract.from_mapping({"modalities": ["text", "image", "video"],
+                "required_fields": list(fields), "artifact_fields": fields})
+            media_metrics = validate_media_manifest(dataset_path, contract=output_contract, policy=policy)
+            size = min(self.sample_size, policy.review_sample_size) if media_metrics["references"] or visual_required else self.sample_size
+            samples_text = _sample_jsonl(dataset_path, size, self.sample_seed)
+            rows = [json.loads(line) for line in samples_text.splitlines()]
+            visual_parts, visual_evidence = visual_sample_parts(rows, dataset_path, policy)
+            if visual_required and not visual_evidence:
+                raise ValueError("multimodal review needs image/video ArtifactRefs in candidate records; retain source evidence in the output")
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            result = ReviewResult(0.0, False, [f"media review preparation failed: {exc}"], status="error")
+            if evidence_path:
+                with open(evidence_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"dataset_path": dataset_path, "status": "error",
+                        "media_policy": media_policy or {}, "visual_evidence": visual_evidence,
+                        "result": {"issues": result.issues}}, ensure_ascii=False) + "\n")
+            return result
         if not samples_text:
             return ReviewResult(0.0, False, ["dataset is empty or unreadable"])
 
@@ -405,7 +433,11 @@ class CriteriaReviewer:
             quality_criteria="\n".join(f"{i}. {c}" for i, c in enumerate(quality_criteria, 1)),
             samples=samples_text,
         )
-        verdict, attempts = self._judge(prompt, len(quality_criteria))
+        content = prompt
+        if visual_parts:
+            prompt += "\nAttached media are labelled by sample row. Video evidence consists of timestamped sampled frames; assess visual grounding against those frames. Audio is not included."
+            content = [{"type": "text", "text": prompt}, *visual_parts]
+        verdict, attempts = self._judge(content, len(quality_criteria))
         status = "ok" if verdict is not None else "error"
         if verdict is None:
             last = attempts[-1]
@@ -432,6 +464,8 @@ class CriteriaReviewer:
         required = list(target_schema)
         metrics = _scan_validation_metrics(dataset_path, required)
         hard: dict[str, Any] = {k: metrics[k] for k in ("dup_rate", "null_rate", "parse_valid_rate")}
+        hard["media_references"] = media_metrics["references"]
+        hard["visual_assets_reviewed"] = len(visual_evidence)
         if metrics["dup_field"]:
             hard["dup_field"] = metrics["dup_field"]
         if metrics["total"] == 0:
@@ -471,6 +505,8 @@ class CriteriaReviewer:
                 "reviewed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "status": status,
                 "prompt": prompt,
+                "media_policy": policy.to_dict(),
+                "visual_evidence": visual_evidence,
                 "attempts": attempts,
                 "result": {
                     "review_score": result.review_score,

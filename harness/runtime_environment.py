@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -26,6 +27,13 @@ def runtime_contract() -> dict[str, Any]:
         'serving_source': str(REPO_ROOT / 'dataflow_evolve/io/serving.py'),
         'pythonpath': pipeline_pythonpath(),
         'dependency_check_tool': 'rsi_check_environment',
+        'media': {
+            'image_dependency': 'PIL',
+            'ffmpeg': shutil.which(os.environ.get('DF_FFMPEG_BIN') or os.environ.get('RSI_FFMPEG_BIN') or 'ffmpeg'),
+            'ffprobe': shutil.which(os.environ.get('DF_FFPROBE_BIN') or os.environ.get('RSI_FFPROBE_BIN') or 'ffprobe'),
+            'video_transport': 'timestamped JPEG frames via image_url parts',
+            'helper_source': str(REPO_ROOT / 'dataflow_evolve/media.py'),
+        },
         'note': 'Compile and execute use this Python with the listed PYTHONPATH; task-specific dependencies belong in this environment.',
     }
 

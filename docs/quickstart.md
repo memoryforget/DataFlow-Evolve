@@ -8,6 +8,14 @@ DataFlow-Evolve 是一个面向 Claude Code 和 Codex 的数据集迭代优化�
 - **框架**：通过 MCP 工具执行 pipeline、评审数据、记录迭代历史、管理下游评测任务和导出结果。
 - **Skills**：为 Agent 提供实验编排和 pipeline 编写规范。
 
+## 图片与视频
+
+支持文本、图片及视频引用的 JSONL 数据集。图片直接送入视觉模型，视频按配置抽帧，pipeline 和质量评审均可使用；视频音频和原生视频 API 需专用适配器。视觉任务需选择支持图文消息的 pipeline / review 模型。
+
+安装时增加 `multimodal` 依赖：`python -m pip install -e '.[review,multimodal]'`；视频还需安装 FFmpeg 和 ffprobe。Agent 会与用户确认媒体字段、抽帧及评审预算，再初始化实验。导出包含 JSONL 和媒体目录，二者可一起迁移。
+
+字段格式、初始化参数与调用示例见[多模态说明](../skills/claude/dataflow-evolver-pipeline/references/multimodal.md)。
+
 ## 安装
 
 使用 Python 3.10+，在运行 Claude Code / Codex 的机器上执行：

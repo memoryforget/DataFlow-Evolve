@@ -200,16 +200,13 @@ class CustomOperator(OperatorABC):
 Keep operator code task-specific and preserve useful raw provenance fields. Put
 each coherent processing step in its own operator module.
 
-For media-producing operators, persist generated image bytes or files with
-`dataflow_evolve.artifact_store_for(ITERATION_DIR).put_image(name, image)` and
-carry the returned `ArtifactRef` dictionary in the output record. Use
-`put_video_reference(name, uri, media_type=...)` for video references,
-preserving the source MIME type; timestamped evidence stays as structured
-records. A row may carry both image and video references. Keep
-modality-specific decoding, model calls, feedback and acceptance rules in task
-adapters; do not send a bare file path to a text-only LLM and treat its answer
-as visual evidence. Generated media are mirrored into the final run's artifact
-store when the incumbent is exported.
+For image/video tasks, read [the multimodal contract](references/multimodal.md).
+Use canonical `ArtifactRef` records, `artifact_to_content_parts` and injected
+serving conversations for visual calls. Preserve source media references for
+review. Save generated images with `artifact_store_for(ITERATION_DIR).put_image`
+and store the returned reference dictionary in the row. Video references use
+`put_video_reference` with an absolute local path and the source MIME type.
+Export copies referenced media beside the JSONL and rewrites relative paths.
 
 ## Cardinality-changing operator resilience
 
@@ -278,7 +275,7 @@ deliberately:
 | call | each item must be | sent as |
 |---|---|---|
 | `generate_from_input(prompts, system_prompt=...)` | a **string** | one system turn from `system_prompt`, then the string as the user turn |
-| `generate_from_conversations(dialogues)` | a **list of `{"role", "content"}` dicts**, every `content` a string | the list verbatim as `messages` |
+| `generate_from_conversations(dialogues)` | a **list of `{"role", "content"}` dicts**; `content` is a string or a list of `text`/`image_url` parts | the list verbatim as `messages` |
 
 So for a single instruction plus one record, build a string and give the system
 turn through the `system_prompt` argument:
@@ -289,8 +286,9 @@ responses = self.llm_serving.generate_from_input(
     prompts, system_prompt=_SYSTEM_PROMPT)
 ```
 
-Only reach for `generate_from_conversations` when a record genuinely needs
-several turns, and then pass message dicts whose `content` values are strings:
+Use `generate_from_conversations` for multiple turns or visual content.
+Text-only conversations use string content as shown below; image/video calls
+use content parts as shown in [the multimodal example](references/multimodal.md):
 
 ```python
 dialogues = [

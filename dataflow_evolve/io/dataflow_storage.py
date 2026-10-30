@@ -193,11 +193,26 @@ class FileStorage(DataFlowStorage):
         deliberately keeps pandas missing-value semantics, where they are
         expected.
         """
+        dataframe = self._normalize_media(dataframe, writing=False)
         if output_type == "dataframe":
             return dataframe
         elif output_type == "dict":
             return dataframe_records_with_python_nulls(dataframe)
         raise ValueError(f"Unsupported output type: {output_type}")
+
+    def _normalize_media(self, dataframe: pd.DataFrame, *, writing: bool) -> pd.DataFrame:
+        from ..media import absolute_artifact_refs
+        from pathlib import Path
+        source = self._get_cache_file_path(self.operator_step)
+        generated = os.environ.get("ITERATION_DIR") if writing else None
+        generated_root = Path(generated) / "runs" / "generated" if generated else None
+        # Only object cells can carry references; leave pandas scalar/null semantics intact.
+        dataframe = dataframe.copy()
+        for column in dataframe.select_dtypes(include=["object"]).columns:
+            dataframe[column] = dataframe[column].map(
+                lambda value: absolute_artifact_refs(value, source, generated_root=generated_root)
+                if isinstance(value, (dict, list, tuple)) else value)
+        return dataframe
 
     def _resolve_read_format(self, file_path: str) -> str:
         """Resolve the read format: the file extension at step 0, else cache_type."""
@@ -226,7 +241,7 @@ class FileStorage(DataFlowStorage):
                 "Writing before the first step would overwrite "
                 f"first_entry_file_name ({self.first_entry_file_name!r})."
             )
-        dataframe = _frame_from_rows(data)
+        dataframe = self._normalize_media(_frame_from_rows(data), writing=True)
         file_path = self._get_cache_file_path(self.operator_step + 1)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         self.logger.success(f"Writing data to {file_path} with type {self.cache_type}")
@@ -307,7 +322,7 @@ class BatchedFileStorage(FileStorage):
                 "Writing before the first step would overwrite "
                 f"first_entry_file_name ({self.first_entry_file_name!r})."
             )
-        dataframe = _frame_from_rows(data)
+        dataframe = self._normalize_media(_frame_from_rows(data), writing=True)
         file_path = self._get_cache_file_path(self.operator_step + 1)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         self.logger.success(f"Writing data to {file_path} with type {self.cache_type}")
@@ -458,6 +473,6 @@ class StreamBatchedFileStorage(BatchedFileStorage):
         reader = self._load_local_file(file_path, local_cache, self.batch_size)
         if hasattr(reader, "__iter__"):
             for chunk in reader:
-                yield chunk
+                yield self._normalize_media(chunk, writing=False) if isinstance(chunk, pd.DataFrame) else chunk
         else:
-            yield reader
+            yield self._normalize_media(reader, writing=False) if isinstance(reader, pd.DataFrame) else reader

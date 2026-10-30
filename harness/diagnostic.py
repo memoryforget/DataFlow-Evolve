@@ -43,6 +43,8 @@ def _review_context(record: dict[str, Any] | None, issues: list[str]) -> dict[st
             for key in ("dup_rate", "null_rate", "parse_valid_rate", "contamination_rate")
         },
     }
+    context["visual_evidence"] = (record or {}).get("visual_evidence", [])
+    context["media_policy"] = (record or {}).get("media_policy", {})
     feedback = result.get("domain_feedback")
     if isinstance(feedback, dict) and feedback.get("review_mode") == "criteria":
         context.update({
@@ -115,6 +117,10 @@ def build_diagnostic_context(
     review_context = _review_context(
         None if execution_error else latest_review_record(iter_dir), list(review_issues or [])
     )
+    media_paths = list(dict.fromkeys(
+        item["uri"] for item in review_context["visual_evidence"]
+        if isinstance(item, dict) and isinstance(item.get("uri"), str)
+    ))
 
     prompt = (
         "You are an independent pipeline execution diagnostic sub-agent.\n"
@@ -131,6 +137,9 @@ def build_diagnostic_context(
         "or output JSONL; use only the bounded samples in execution_observation.json.\n"
         "Check execution mechanisms and domain-rule compliance. Record evidence gaps when "
         "the current attempt has only failure logs; ignore receipts from earlier attempts.\n\n"
+        "For visual tasks, use the review's media hashes and sampled timestamps. You may "
+        "inspect the listed sampled media read-only with available visual tools; report "
+        "an evidence gap when the sampled frames cannot establish a temporal claim.\n\n"
         "Return exactly one JSON object in this format (keep the key names):\n"
         '{"status":"ok","summary":"...","findings":[{"step":"...",'
         '"severity":"low|medium|high","evidence":"...","diagnosis":"...",'
@@ -141,6 +150,8 @@ def build_diagnostic_context(
         + "\n".join(f"- {path}" for path in source_files)
         + "\nExecution evidence for the current attempt:\n"
         + "\n".join(f"- {path}" for path in evidence_paths)
+        + "\nMedia represented in the review sample (read-only):\n"
+        + "\n".join(f"- {path}" for path in media_paths)
         + "\nDomain skill files (read for applicable rules):\n"
         + "\n".join(f"- {path}" for path in domain_paths)
         + "\nCurrent execution error:\n"
@@ -164,6 +175,7 @@ def build_diagnostic_context(
         "observation_path": observation_path,
         "source_files": source_files,
         "evidence_paths": evidence_paths,
+        "media_paths": media_paths,
         "domain_skill_paths": domain_paths,
         "output_path": str(iter_dir / DIAGNOSTIC_FILENAME),
     }

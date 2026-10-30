@@ -48,6 +48,8 @@ from dataflow_evolve.step_cache import (
 
 from .execution_observation import write_execution_observation
 from .reviewer import CriteriaReviewer, ReviewResult
+from dataflow_evolve.core.contracts import InputContract
+from dataflow_evolve.media import MediaPolicy, validate_media_manifest
 from .telemetry.pipeline_usage import (
     ATTEMPT_ENV,
     BOOTSTRAP_DIR,
@@ -353,6 +355,9 @@ def _run_review(
         target_schema=state.target_schema,
         task_description=state.task_description,
         evidence_path=str(iter_dir / "review.jsonl"),
+        input_contract=getattr(state, "input_contract", None),
+        output_artifact_fields=getattr(state, "output_artifact_fields", None),
+        media_policy=getattr(state, "media_policy", None),
     )
 
 
@@ -499,6 +504,7 @@ def submit_pipeline(
     usage_summary_path = iter_dir / "pipeline_llm_token_usage.json"
     base_env = dict(os.environ)
     base_env.update({
+        "DF_MEDIA_POLICY": json.dumps(getattr(state, "media_policy", {})),
         "ENTRY_PATH": resolved_entry,
         "CACHE_DIR": resolved_cache,
         "ITERATION_DIR": str(iter_dir),
@@ -585,6 +591,14 @@ def submit_pipeline(
 
     # ── 1. Artifact validation (not repairable via retry; always advance) ────
 
+    try:
+        input_spec = getattr(state, "input_contract", None) or {"modalities": ["text"]}
+        validate_media_manifest(resolved_entry, contract=InputContract.from_mapping(input_spec),
+                                policy=MediaPolicy.from_mapping(getattr(state, "media_policy", None)))
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return _fail("artifact_validation", f"input media validation failed: {exc}", None,
+                     budget_exhausted=True)
+
     artifact_error = _check_artifacts(iter_dir)
     if artifact_error:
         return _fail("artifact_validation", artifact_error, None,
@@ -601,6 +615,7 @@ def submit_pipeline(
             parent_iteration_dir=_incumbent_dir(state, iter_dir),
             raw_entry_path=resolved_entry,
             pipeline_filename=_REQUIRED_ENTRY,
+            media_policy=state.media_policy,
         )
     except (OSError, ValueError) as exc:
         # Reuse is an optimization: any doubt means a full run from the raw input.
@@ -645,7 +660,17 @@ def submit_pipeline(
         dataset_path = reuse_plan.entry_path
     elif fresh_steps and fresh_steps[-1].stat().st_size > 0:
         dataset_path = str(fresh_steps[-1])
-    if dataset_path and config.operators:
+    if dataset_path:
+        try:
+            fields = getattr(state, "output_artifact_fields", {})
+            output_spec = InputContract.from_mapping({
+                "modalities": ["text", "image", "video"],
+                "required_fields": list(fields), "artifact_fields": fields})
+            validate_media_manifest(dataset_path, contract=output_spec,
+                                    policy=MediaPolicy.from_mapping(getattr(state, "media_policy", None)))
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            failure = f"output media validation failed: {exc}"
+    if dataset_path and not failure and config.operators:
         try:
             write_step_manifest(
                 config, iter_dir,
@@ -654,6 +679,7 @@ def submit_pipeline(
                 plan=reuse_plan,
                 executed_artifacts=fresh_steps,
                 final_dataset_path=dataset_path,
+                media_policy=state.media_policy,
             )
         except (OSError, ValueError) as exc:
             failure = f"step manifest validation failed: {exc}"

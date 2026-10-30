@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+multimodal = ["Pillow>=10,<13"]
 review = [
     "openai>=1,<3",
     "requests>=2.31,<3",

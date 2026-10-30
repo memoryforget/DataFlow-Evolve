@@ -66,6 +66,20 @@ Ask the user for:
    the supplied domain rules, or use no domain skill. Detailed dataset criteria
    supply content for a proposed skill; confirm creation separately.
 
+### Image and video tasks
+
+Before approving the plan, confirm input/output media fields and formats, local
+media paths, vision-capable pipeline and review models, and the review sample,
+video frame count and payload limits. Videos use timestamped sampled frames;
+audio and native video API payloads require a task-specific adapter.
+
+Read `dataflow-evolver-pipeline/references/multimodal.md` from the installed
+skills directory. Save `input_contract`, `output_artifact_fields` and
+`media_policy` in the plan and pass them to `rsi_init`. Retain canonical source
+media references in candidate records for visual review. Use `runtime.media`
+and `rsi_check_environment(["PIL"])` to check dependencies. The approved API smoke
+test must include actual media for both pipeline and review models.
+
 ### Confirm the experiment plan
 
 Use explicit choices already supplied. Keep unanswered choices pending and ask
@@ -249,6 +263,11 @@ Key rules:
 
 ## Phase 2 — Submit and interpret
 
+Before implementation, record the changes adopted for this round in
+`decision.json.reason`, including changes announced to the user. Before
+submission, check each against the implementation and actual call path.
+Record and explain any change that was dropped or replaced.
+
 Call `rsi_submit_pipeline` with `iteration_dir` to validate, compile, execute
 and review the pipeline. After every actual attempt, complete mechanism
 diagnosis before repairs, the next pipeline, downstream evaluation or export.
@@ -335,7 +354,10 @@ After every actual submit attempt, including accepted runs and failures:
 3. Give the sub-agent the task requirements and evidence packet rather than
    the orchestration conversation. It reads source, current execution evidence
    and domain rules, compares behavior with the declared design, and returns
-   the requested JSON. Keep artifact access read-only and use bounded samples.
+   the requested JSON. Include the adopted changes for this round; verify
+   their implementation and execution or valid cache-reuse evidence, and
+   report omissions in `contract_mismatches`. Keep artifact access read-only
+   and use bounded samples.
 4. Wait for completion, parse the JSON and check the required fields:
    `status`, `summary`, `findings`, `contract_mismatches`. Save the result to
    `output_path` (`pipeline_diagnostic.json`) and close the temporary agent.

@@ -480,12 +480,24 @@ class PipelineLLMServing(LLMServingABC):
                         f"{method} item {idx} turn {turn_idx} is missing "
                         f"{missing}; keys present: {sorted(turn)}"
                     )
-                if not isinstance(turn["content"], str):
-                    raise TypeError(
-                        f"{method} item {idx} turn {turn_idx} content must be a "
-                        f"string, got {type(turn['content']).__name__}: "
-                        f"{self._describe(turn['content'])}"
-                    )
+                content = turn["content"]
+                if isinstance(content, str):
+                    continue
+                location = f"{method} item {idx} turn {turn_idx}"
+                if not isinstance(content, list) or not content:
+                    raise TypeError(f"{location} content must be a string or nonempty list of text/image_url parts")
+                for part in content:
+                    if not isinstance(part, dict):
+                        raise TypeError(f"{location} content part must be a dict")
+                    if part.get("type") == "text" and isinstance(part.get("text"), str):
+                        continue
+                    if part.get("type") == "image_url" and isinstance(part.get("image_url"), dict):
+                        image = part["image_url"]
+                        url = image.get("url")
+                        if (isinstance(url, str) and url.startswith(("https://", "http://", "data:image/"))
+                                and image.get("detail", "auto") in {"auto", "low", "high"}):
+                            continue
+                    raise TypeError(f"{location} invalid content part; expected text or image_url with an HTTP(S)/image data URL")
 
     def generate_from_input(
         self,

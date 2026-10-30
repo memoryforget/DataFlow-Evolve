@@ -158,6 +158,10 @@ def trigger_downstream_eval(
             "task_description": state.task_description,
             "quality_criteria": state.quality_criteria,
             "target_schema": state.target_schema,
+            "input_contract": state.input_contract,
+            "output_artifact_fields": state.output_artifact_fields,
+            "media_policy": state.media_policy,
+            "media_base_dir": str(Path(dataset).resolve().parent) if dataset else None,
         },
     }
     request_path, result_path = job_dir / "request.json", job_dir / "result.json"

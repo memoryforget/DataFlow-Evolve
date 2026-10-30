@@ -81,6 +81,14 @@ DataFlow-Evolve/
 | `rsi_export_dataset` | 导出当前 incumbent 数据集到指定路径 |
 | `rsi_set_credential_env` | 修改 workspace 读取 API key 的环境变量名（review / pipeline / attribution）或凭据文件路径（不存 key 值） |
 
+## 图片与视频
+
+支持文本、图片及视频引用的 JSONL 数据集。图片直接送入视觉模型，视频按配置抽帧，pipeline 和质量评审均可使用；视频音频和原生视频 API 需专用适配器。视觉任务需选择支持图文消息的 pipeline / review 模型。
+
+安装时增加 `multimodal` 依赖：`python -m pip install -e '.[review,multimodal]'`；视频还需安装 FFmpeg 和 ffprobe。Agent 会与用户确认媒体字段、抽帧及评审预算，再初始化实验。导出包含 JSONL 和媒体目录，二者可一起迁移。
+
+字段格式、初始化参数与调用示例见[多模态说明](skills/claude/dataflow-evolver-pipeline/references/multimodal.md)。
+
 ## 安装
 
 使用 Python 3.10+，在运行 Claude Code / Codex 的机器上执行：

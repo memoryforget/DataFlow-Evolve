@@ -24,7 +24,7 @@ import json
 import threading
 from dataclasses import asdict
 import os
-import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -39,6 +39,8 @@ from mcp_types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from harness.runtime_environment import runtime_contract, check_environment
+from dataflow_evolve.core.contracts import InputContract
+from dataflow_evolve.media import MediaPolicy, validate_media_manifest, export_media_dataset
 from harness.workspace import Workspace, WorkspaceState, FeedbackSource, init_workspace
 from harness.executor import review_iteration as _review_iteration
 from harness.executor import submit_pipeline as _submit_pipeline
@@ -195,12 +197,15 @@ class RsiInitInput(BaseModel):
         ),
     )
     pipeline_model: str = Field(default="", description="Pipeline model name.")
-    pipeline_max_workers: int = Field(default=25, description="LLM concurrent workers.")
+    pipeline_max_workers: int = Field(default=25, ge=1, description="LLM concurrent workers.")
     quality_criteria: list[str] = Field(default_factory=list, description="Quality criteria strings.")
     target_schema: dict[str, str] = Field(
         default_factory=lambda: {"messages": "list[dict]"},
         description="Target schema keys and types.",
     )
+    input_contract: dict[str, Any] = Field(default_factory=lambda: {"modalities": ["text"]}, description="Input modalities, required_fields and artifact_fields mapping field names to image/video_reference. References may be lists.")
+    output_artifact_fields: dict[str, str] = Field(default_factory=dict, description="Required output media fields and their artifact kinds; retain evidence for visual review.")
+    media_policy: dict[str, Any] = Field(default_factory=dict, description="MediaPolicy settings: review_sample_size, video_frames, max_edge, max_images, max_payload_bytes, max_source_bytes, decode_timeout_sec.")
     provider: str = Field(default="claude", description="Agent provider: claude|codex|opencode.")
     workspace_dir: str = Field(default="", description="Workspace directory path.")
 
@@ -232,6 +237,14 @@ async def rsi_init(params: RsiInitInput) -> str:
     if not Path(kwargs["input_path"]).exists():
         return json.dumps({"status": "error", "error": f"input_path does not exist: {kwargs['input_path']}"})
 
+    try:
+        contract = InputContract.from_mapping(kwargs["input_contract"])
+        policy = MediaPolicy.from_mapping(kwargs["media_policy"])
+        InputContract.from_mapping({"modalities": ["text", "image", "video"], "artifact_fields": kwargs["output_artifact_fields"]})
+        await asyncio.to_thread(validate_media_manifest, kwargs["input_path"], contract=contract, policy=policy)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return json.dumps({"status": "error", "error": f"input media validation failed: {exc}"})
+
     ws = init_workspace(
         kwargs["workspace_dir"],
         task_description=kwargs["task_description"],
@@ -246,6 +259,9 @@ async def rsi_init(params: RsiInitInput) -> str:
         pipeline_max_workers=kwargs["pipeline_max_workers"],
         quality_criteria=kwargs["quality_criteria"],
         target_schema=kwargs["target_schema"],
+        input_contract=contract.to_dict(),
+        output_artifact_fields=kwargs["output_artifact_fields"],
+        media_policy=policy.to_dict(),
         provider=kwargs["provider"],
     )
     _, first_iter_dir = ws.next_iteration_dir()
@@ -257,6 +273,9 @@ async def rsi_init(params: RsiInitInput) -> str:
         "first_iteration_dir": str(first_iter_dir),
         "runtime": runtime_contract(),
         "pipeline_llm": _pipeline_llm_contract(ws.state()),
+        "input_contract": ws.state().input_contract,
+        "output_artifact_fields": ws.state().output_artifact_fields,
+        "media_policy": ws.state().media_policy,
         "instructions": (
             "Write pipeline.py, operators/, and decision.json into first_iteration_dir, "
             "then call rsi_submit_pipeline with that directory."
@@ -838,6 +857,9 @@ async def rsi_get_status(params: RsiStatusInput) -> str:
         "domain_skills": state.domain_skills,
         "runtime": runtime_contract(),
         "pipeline_llm": _pipeline_llm_contract(state),
+        "input_contract": state.input_contract,
+        "output_artifact_fields": state.output_artifact_fields,
+        "media_policy": state.media_policy,
     }, ensure_ascii=False)
 
 
@@ -862,11 +884,13 @@ async def rsi_export_dataset(params: RsiExportInput) -> str:
         dst = Path(params.output_path)
     else:
         dst = ws.root / "export" / "incumbent.jsonl"
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
+    try:
+        bundle = await asyncio.to_thread(export_media_dataset, src, dst)
+    except (OSError, ValueError) as exc:
+        return json.dumps({"status": "error", "error": f"export failed: {exc}"})
     return json.dumps({
         "status": "ok",
-        "output_path": str(dst),
+        **bundle,
         "incumbent_iteration": state.incumbent_iteration,
         "incumbent_score": state.incumbent_score,
     }, ensure_ascii=False)

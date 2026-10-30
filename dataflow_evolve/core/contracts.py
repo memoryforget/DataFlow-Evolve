@@ -134,20 +134,20 @@ class InputContract:
     def validate_record(self, record: Mapping[str, Any], *, row_number: int = 1) -> None:
         if not isinstance(record, Mapping):
             raise ValueError(f"input row {row_number} must be an object")
-        missing = [field for field in self.required_fields if record.get(field) in (None, "")]
+        missing = [field for field in self.required_fields if record.get(field) in (None, "", [])]
         if missing:
             raise ValueError(f"input row {row_number} is missing required fields {missing}")
         for field, expected_kind in self.artifact_fields.items():
             if field not in record or record[field] is None:
                 continue
-            try:
-                actual = ArtifactRef.from_mapping(record[field])
-            except ValueError as exc:
-                raise ValueError(f"input row {row_number} field {field!r}: {exc}") from exc
-            if actual.kind != expected_kind:
-                raise ValueError(
-                    f"input row {row_number} field {field!r} must be {expected_kind!r}"
-                )
+            values = record[field] if isinstance(record[field], list) else [record[field]]
+            for value in values:
+                try:
+                    actual = ArtifactRef.from_mapping(value)
+                except ValueError as exc:
+                    raise ValueError(f"input row {row_number} field {field!r}: {exc}") from exc
+                if actual.kind != expected_kind:
+                    raise ValueError(f"input row {row_number} field {field!r} must be {expected_kind!r}")
 
     def validate_entry(self, path: str | Path) -> int:
         """Stream an input manifest without loading binary media into memory."""

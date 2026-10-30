@@ -21,11 +21,17 @@ from .io.dataflow_storage import (
     StreamBatchedFileStorage,
 )
 from .io.serving import PipelineLLMServing
-from .media import artifact_store_for, resolve_local_input_artifact
+from .media import (
+    MediaPolicy, artifact_store_for, resolve_local_input_artifact,
+    artifact_to_content_parts, absolute_artifact_refs,
+)
 from .step_cache import FrameworkStepCache
 
 __all__ = [
     "ArtifactRef",
+    "MediaPolicy",
+    "artifact_to_content_parts",
+    "absolute_artifact_refs",
     "OperatorABC",
     "LLMServingABC",
     "PipelineABC",

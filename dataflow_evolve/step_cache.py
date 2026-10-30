@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from .models import PipelineConfig
+from .media import media_file_identity
 
 CACHE_PLAN_ENV = "DF_FRAMEWORK_STEP_CACHE_PLAN"
 MANIFEST_FILENAME = "step_manifest.json"
 REUSE_PLAN_FILENAME = "step_reuse_plan.json"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ def prepare_step_reuse(
     parent_iteration_dir: Path | None,
     raw_entry_path: str,
     pipeline_filename: str,
+    media_policy: dict[str, Any] | None = None,
 ) -> StepReusePlan:
     """Resolve the reusable logical prefix; generated code never chooses an artifact."""
     iteration_dir = iteration_dir.resolve()
@@ -117,7 +119,14 @@ def prepare_step_reuse(
     if not parent or int(parent.get("schema_version", 0)) != SCHEMA_VERSION:
         plan.reason = "parent step manifest unavailable"
         return _persist_plan(iteration_dir, plan)
-    current_raw = _file_identity(Path(raw_path))
+    if (media_policy or {}) != parent.get("media_policy", {}):
+        plan.reason = "media policy changed"
+        return _persist_plan(iteration_dir, plan)
+    try:
+        current_raw = _file_identity(Path(raw_path))
+    except (OSError, ValueError):
+        plan.reason = "input media unavailable or changed"
+        return _persist_plan(iteration_dir, plan)
     if current_raw != parent.get("raw_input"):
         plan.reason = "raw input identity changed"
         return _persist_plan(iteration_dir, plan)
@@ -140,6 +149,7 @@ def prepare_step_reuse(
             or not artifact.is_file()
             or artifact.stat().st_size <= 0
             or _sha256_file(artifact) != previous.get("output_sha256")
+            or not _same_media(artifact, previous.get("output_media"))
         ):
             break
         prefix += 1
@@ -193,6 +203,7 @@ def write_step_manifest(
     plan: StepReusePlan,
     executed_artifacts: list[Path],
     final_dataset_path: str,
+    media_policy: dict[str, Any] | None = None,
 ) -> Path:
     descriptors = operator_descriptors(config, iteration_dir, pipeline_filename)
     expected_suffix = max(0, len(descriptors) - plan.prefix_count)
@@ -217,6 +228,7 @@ def write_step_manifest(
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "raw_input": _file_identity(Path(raw_entry_path).resolve()),
+        "media_policy": media_policy or {},
         "reuse": plan.payload(),
         "steps": steps,
         "final_dataset_path": str(Path(final_dataset_path).resolve()),
@@ -426,7 +438,15 @@ def _call_name(node: ast.AST) -> str | None:
 
 def _file_identity(path: Path) -> dict[str, Any]:
     stat = path.stat()
-    return {"path": str(path), "bytes": stat.st_size, "sha256": _sha256_file(path)}
+    return {"path": str(path), "bytes": stat.st_size, "sha256": _sha256_file(path),
+            "media": media_file_identity(path)}
+
+
+def _same_media(path: Path, previous: Any) -> bool:
+    try:
+        return media_file_identity(path) == previous
+    except (OSError, ValueError):
+        return False
 
 
 def _artifact_summary(path: Path) -> dict[str, Any]:
@@ -453,6 +473,7 @@ def _artifact_summary(path: Path) -> dict[str, Any]:
         "output_rows": rows,
         "output_fields": fields,
         "output_sha256": _sha256_file(path),
+        "output_media": media_file_identity(path),
         "contains_local_blob_refs": contains_local_blob_refs,
     }
 
@@ -460,7 +481,7 @@ def _artifact_summary(path: Path) -> dict[str, Any]:
 def _contains_local_blob_ref(value: Any) -> bool:
     if isinstance(value, dict):
         if (
-            value.get("kind") in {"image", "binary", "blob"}
+            value.get("kind") in {"image", "video_reference", "binary", "blob"}
             and isinstance(value.get("uri"), str)
             and value["uri"].startswith("blobs/")
         ):

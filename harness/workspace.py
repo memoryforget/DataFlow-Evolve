@@ -98,6 +98,9 @@ class WorkspaceState:
     # quality criteria (user-defined)
     quality_criteria: list[str] = field(default_factory=list)
     target_schema: dict[str, str] = field(default_factory=lambda: {"messages": "list[dict]"})
+    input_contract: dict[str, Any] = field(default_factory=lambda: {"modalities": ["text"]})
+    output_artifact_fields: dict[str, str] = field(default_factory=dict)
+    media_policy: dict[str, Any] = field(default_factory=dict)
     # downstream feedback: any number of sources, each with its own eval script
     feedback_sources: dict[str, FeedbackSource] = field(default_factory=dict)
     # Optional bad-case attribution LLM, shared by the sources that use it

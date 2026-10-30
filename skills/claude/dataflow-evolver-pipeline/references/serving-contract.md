@@ -39,6 +39,15 @@ message lists and `generate_embedding_from_input` for embeddings. Its
 `generate_from_input` also accepts a per-call `json_schema` argument that sets
 a strict `response_format`.
 
+## Image and video messages
+
+`generate_from_conversations` accepts each message's `content` as a string or
+a nonempty list of OpenAI-compatible `text` and `image_url` parts. An image URL
+may be HTTP(S) or a `data:image/...` URL; a local path must first be encoded.
+Use `artifact_to_content_parts` for local images and timestamped video frames.
+`generate_from_input` remains a string-prompt interface. See
+[the multimodal contract](multimodal.md) for dataset schemas and a call example.
+
 ## Response contracts
 
 With `enable_thinking=true`, serving returns:
